@@ -279,7 +279,7 @@ async def start_handler(message: Message, state: FSMContext):
 
 
 @router.message(ChatMode.waiting_urgent, F.text.casefold() == "так")
-async def handle_urgent_yes(message: Message):
+async def handle_urgent_yes(message: Message, state: FSMContext):
     """Обробка термінової допомоги"""
     if user_access.is_blocked(message.from_user.id):
         await message.answer(
@@ -288,8 +288,23 @@ async def handle_urgent_yes(message: Message):
         )
         return
 
-    await message.answer(messages.help_message_offline_one, parse_mode="HTML")
-    await message.answer(messages.help_message_offline_two, reply_markup=get_yes_no_keyboard(), parse_mode="HTML")
+    await message.answer(messages.help_message_offline_one, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    # Очікуємо 15 секунд
+    await asyncio.sleep(15)
+    await message.answer(messages.help_message_offline_two, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
+    await asyncio.sleep(7)
+    await message.answer(messages.main_message_online, parse_mode="HTML")
+    await asyncio.sleep(15)
+    await message.answer(messages.start_form_message, parse_mode="HTML")
+    await asyncio.sleep(3)
+    await message.answer(messages.ask_name_form_message, parse_mode="HTML")
+
+    await state.set_state(UserForm.waiting_for_name)
+
+    # Запускаем таймер для проверки тайм-аута
+    user_timers[message.from_user.id] = asyncio.create_task(
+        check_timeout(message.from_user.id, state, message)
+    )
 
 
 @router.message(ChatMode.waiting_urgent, F.text.casefold() == "ні")
@@ -303,6 +318,8 @@ async def handle_urgent_no(message: Message, state: FSMContext):
         return
 
     await state.set_state(UserForm.waiting_for_name)
+    await message.answer(messages.main_message_online, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await asyncio.sleep(3)
     await message.answer(messages.start_form_message, parse_mode="HTML")
     await message.answer(messages.ask_name_form_message, parse_mode="HTML")
 
