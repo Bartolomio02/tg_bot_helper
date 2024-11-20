@@ -268,7 +268,7 @@ async def start_handler(message: Message, state: FSMContext):
         except Exception as e:
             logging.error(f"Помилка при надсиланні сповіщення оператору {operator_id}: {e}")
 
-    if 9 <= current_hour <= 20:
+    if 9+2 <= current_hour <= 20+2:
         # Робочі години
         await state.set_state(ChatMode.automated)
         await message.answer(messages.main_message_online, reply_markup=get_main_keyboard(), parse_mode="HTML")
