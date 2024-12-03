@@ -7,7 +7,7 @@ class UserAccess:
     def __init__(self):
         """Ініціалізація системи контролю доступу користувачів"""
         self.blocked_users_file = Path("data/blocked_users.json")
-        self._blocked_users: Set[int] = set()
+        self._blocked_users: Set[str] = set()
         self._load_blocked_users()
 
     def _load_blocked_users(self) -> None:
@@ -31,40 +31,40 @@ class UserAccess:
         except Exception as e:
             print(f"Помилка при збереженні списку заблокованих користувачів: {e}")
 
-    def block_user(self, user_id: int) -> bool:
+    def block_user(self, user_uuid: str) -> bool:
         """
         Блокування користувача
         
         :param user_id: ID користувача для блокування
         :return: True якщо користувача заблоковано, False якщо вже був заблокований
         """
-        if user_id in self._blocked_users:
+        if user_uuid in self._blocked_users:
             return False
-        self._blocked_users.add(user_id)
+        self._blocked_users.add(user_uuid)
         self._save_blocked_users()
         return True
 
-    def unblock_user(self, user_id: int) -> bool:
+    def unblock_user(self, user_uuid: str) -> bool:
         """
         Розблокування користувача
         
         :param user_id: ID користувача для розблокування
         :return: True якщо користувача розблоковано, False якщо не був заблокований
         """
-        if user_id not in self._blocked_users:
+        if user_uuid not in self._blocked_users:
             return False
-        self._blocked_users.remove(user_id)
+        self._blocked_users.remove(user_uuid)
         self._save_blocked_users()
         return True
 
-    def is_blocked(self, user_id: int) -> bool:
+    def is_blocked(self, user_uuid: str) -> bool:
         """
         Перевірка чи заблокований користувач
         
         :param user_id: ID користувача для перевірки
         :return: True якщо користувач заблокований, False якщо ні
         """
-        return user_id in self._blocked_users
+        return user_uuid in self._blocked_users
 
     def get_blocked_users(self) -> Set[int]:
         """

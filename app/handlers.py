@@ -11,7 +11,21 @@ from .keyboard import get_main_keyboard, get_yes_no_keyboard, get_continue_keybo
 from .fsm import UserForm, ChatMode, MediaForm, OtherPeopleHelpForm
 from .middleware import get_operator_ids
 from .user_access import user_access
+from .users_data import UsersData
 
+users_data = UsersData()
+# TODO написать использование класса UsersData для работы с данными пользователей
+# TODO Нужно при старте создавать запись о пользователе если её нет
+# TODO При получении данных в анкете сохранять их в базу данных
+# TODO реализовать функцию оператора которая будет показывать ответы пользователя на анкету
+# TODO переделать блокировку пользователей на использование класса UsersData
+
+# добавлено использование класса UsersData для работы с данными пользователей
+# добавлено создание записи о пользователе при старте если её нет
+# добавлено сохранение данных в базу данных при получении данных в анкете
+
+
+# Роутер для обробки повідомлень
 router = Router()
 
 # Словник для зберігання таймерів користувачів
@@ -41,18 +55,20 @@ async def check_timeout(user_id: int, state: FSMContext, message: Message):
         await state.set_state("waiting_continue")
 
 
-def extract_user_id(message: Message) -> int:
+async def extract_user_id(message: Message) -> int and str:
     """Отримати ID користувача з повідомлення або пересланого повідомлення"""
     try:
         if message.forward_from:
             return message.forward_from.id
         if message.text and "ID: " in message.text:
-            id_part = message.text.split("ID: ")[1].split("\n")[0]
-            return int(id_part)
+            uuid_user = message.text.split("ID: ")[1].split("\n")[0]
+            user_data = await users_data.get_user_data_by_uuid(uuid_user)
+            id_user = user_data['telegram_user_id']
+            return int(id_user), uuid_user
     except (IndexError, ValueError, AttributeError):
         print(f"Помилка при отриманні ID користувача з повідомлення: {message}")
-        return None
-    return None
+        return None, None
+    return None, None
 
 
 async def forward_to_operators(message: Message, user_context: str = None):
@@ -64,7 +80,7 @@ async def forward_to_operators(message: Message, user_context: str = None):
             forwarded = await message.forward(operator_id)
             notification = (
                 f"<b>Повідомлення від користувача:</b>\n"
-                f"📋 <b>ID:</b> <code>{message.from_user.id}</code>\n"
+                f"📋 <b>ID:</b> <code>{users_data.get_user_data(str(messages.from_user.id))}</code>\n"
                 f"👤 <b>Ім'я:</b> {message.from_user.full_name}\n"
                 f"📱 <b>Username:</b> @{message.from_user.username}"
             )
@@ -77,7 +93,8 @@ async def forward_to_operators(message: Message, user_context: str = None):
 
 async def forward_to_user(message: Message, user_id: int):
     """Переслати повідомлення оператора користувачу"""
-    if user_access.is_blocked(user_id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             f"❌ <b>Неможливо надіслати повідомлення. Користувач</b> <code>{user_id}</code> <b>заблокований.</b>",
             parse_mode="HTML"
@@ -85,6 +102,50 @@ async def forward_to_user(message: Message, user_id: int):
         return
     await message.copy_to(user_id)
 
+
+@router.message(Command("form"))
+async def show_user_form_handler(message: Message):
+    """Обробка команди відображення анкети користувача"""
+    if message.from_user.id not in get_operator_ids():
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) != 3:
+            await message.answer(
+                "❌ <b>Використання:</b> /form ID_користувача\n"
+                "Наприклад: /form 01/01/2025 1",
+                parse_mode="HTML"
+            )
+            return
+
+        user_uuid = args[1] + " " + args[2]
+
+        user_data = await users_data.get_user_data_by_uuid(user_uuid)
+        if user_data is None:
+            await message.answer(
+                f"❌ <b>Користувача з ID</b> <code>{user_uuid}</code> <b>не знайдено</b>",
+                parse_mode="HTML"
+            )
+            return
+
+        user_info = (
+            f"📋 <b>Дані користувача:</b>\n"
+            f'📋 <b>ID:</b> <code>{user_data["uuid"]}</code>\n'
+            f"👤 <b>Ім'я:</b> {user_data['name']}\n"
+            f"📅 <b>Вік:</b> {user_data['age']}\n"
+            f"📍 <b>Місцезнаходження:</b> {user_data['location']}\n"
+            f"📝 <b>Деталі події:</b> {user_data['event_details']}\n"
+            f"🆘 <b>Тип допомоги:</b> {user_data['help_type']}\n"
+            f"📄 <b>Опис:</b> {user_data['description']}"
+        )
+        await message.answer(user_info, parse_mode="HTML")
+
+    except ValueError:
+        await message.answer(
+            "❌ <b>Помилка: Некоректний ID користувача</b>",
+            parse_mode="HTML"
+        )
 
 @router.message(Command("block"))
 async def block_user_handler(message: Message):
@@ -94,23 +155,23 @@ async def block_user_handler(message: Message):
 
     try:
         args = message.text.split()
-        if len(args) != 2:
+        if len(args) != 3:
             await message.answer(
                 "❌ <b>Використання:</b> /block ID_користувача\n"
-                "Наприклад: /block 123456789",
+                "Наприклад: /block 01/01/2025 1",
                 parse_mode="HTML"
             )
             return
 
-        user_id = int(args[1])
-        if user_access.block_user(user_id):
+        user_uuid = str(args[1] + " " + args[2])
+        if user_access.block_user(user_uuid):
             await message.answer(
-                f"✅ <b>Користувача з ID</b> <code>{user_id}</code> <b>заблоковано</b>",
+                f"✅ <b>Користувача з ID</b> <code>{user_uuid}</code> <b>заблоковано</b>",
                 parse_mode="HTML"
             )
         else:
             await message.answer(
-                f"ℹ️ <b>Користувач з ID</b> <code>{user_id}</code> <b>вже заблокований</b>",
+                f"ℹ️ <b>Користувач з ID</b> <code>{user_uuid}</code> <b>вже заблокований</b>",
                 parse_mode="HTML"
             )
     except ValueError:
@@ -128,23 +189,23 @@ async def unblock_user_handler(message: Message):
 
     try:
         args = message.text.split()
-        if len(args) != 2:
+        if len(args) != 3:
             await message.answer(
                 "❌ <b>Використання:</b> /unblock ID_користувача\n"
-                "Наприклад: /unblock 123456789",
+                "Наприклад: /unblock 01/01/2025 1",
                 parse_mode="HTML"
             )
             return
 
-        user_id = int(args[1])
-        if user_access.unblock_user(user_id):
+        user_uuid = str(args[1] + " " + args[2])
+        if user_access.unblock_user(user_uuid):
             await message.answer(
-                f"✅ <b>Користувача з ID</b> <code>{user_id}</code> <b>розблоковано</b>",
+                f"✅ <b>Користувача з ID</b> <code>{user_uuid}</code> <b>розблоковано</b>",
                 parse_mode="HTML"
             )
         else:
             await message.answer(
-                f"ℹ️ <b>Користувач з ID</b> <code>{user_id}</code> <b>не був заблокований</b>",
+                f"ℹ️ <b>Користувач з ID</b> <code>{user_uuid}</code> <b>не був заблокований</b>",
                 parse_mode="HTML"
             )
     except ValueError:
@@ -193,6 +254,7 @@ async def help_handler(message: Message):
             "/block ID - Заблокувати користувача\n"
             "/unblock ID - Розблокувати користувача\n"
             "/blocked_list - Показати список заблокованих користувачів\n"
+            "/form ID - Показати анкету користувача\n"
         )
 
     help_text += (
@@ -209,7 +271,8 @@ async def help_handler(message: Message):
 @router.message(Command("cancel"))
 async def cancel_handler(message: Message, state: FSMContext):
     """Обробка команди /cancel"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -236,7 +299,8 @@ async def cancel_handler(message: Message, state: FSMContext):
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext):
     """Обробка команди /start"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -255,18 +319,21 @@ async def start_handler(message: Message, state: FSMContext):
 
     current_hour = datetime.now().hour
 
-    # Сповіщення операторів про новий чат
-    notification = (
-        f"🆕 <b>Новий чат створено:</b>\n"
-        f"📋 <b>ID:</b> <code>{message.from_user.id}</code>\n"
-        f"👤 <b>Ім'я:</b> {message.from_user.full_name}\n"
-        f"📱 <b>Username:</b> @{message.from_user.username}"
-    )
-    for operator_id in get_operator_ids():
-        try:
-            await message.bot.send_message(operator_id, notification, parse_mode="HTML")
-        except Exception as e:
-            logging.error(f"Помилка при надсиланні сповіщення оператору {operator_id}: {e}")
+    add_user = await users_data.add_user(message.from_user.id)
+    if add_user:
+        user_data = await users_data.get_user_data(str(message.from_user.id))
+        # Сповіщення операторів про новий чат
+        notification = (
+            f"🆕 <b>Новий чат створено:</b>\n"
+            f"📋 <b>ID:</b> <code>{user_data['uuid']}</code>\n"
+            f"👤 <b>Ім'я:</b> {message.from_user.full_name}\n"
+            f"📱 <b>Username:</b> @{message.from_user.username}"
+        )
+        for operator_id in get_operator_ids():
+            try:
+                await message.bot.send_message(operator_id, notification, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Помилка при надсиланні сповіщення оператору {operator_id}: {e}")
 
     if 9+2 <= current_hour <= 20+2:
         # Робочі години
@@ -281,7 +348,8 @@ async def start_handler(message: Message, state: FSMContext):
 @router.message(ChatMode.waiting_urgent, F.text.casefold() == "так")
 async def handle_urgent_yes(message: Message, state: FSMContext):
     """Обробка термінової допомоги"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -310,7 +378,8 @@ async def handle_urgent_yes(message: Message, state: FSMContext):
 @router.message(ChatMode.waiting_urgent, F.text.casefold() == "ні")
 async def handle_urgent_no(message: Message, state: FSMContext):
     """Обробка нетермінової допомоги"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -332,7 +401,8 @@ async def handle_urgent_no(message: Message, state: FSMContext):
 @router.message(ChatMode.automated)
 async def handle_menu_choice(message: Message, state: FSMContext):
     """Обробка вибору меню та початок форми"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -370,7 +440,8 @@ async def handle_menu_choice(message: Message, state: FSMContext):
 @router.message(UserForm.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     """Обробка імені користувача"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -385,6 +456,7 @@ async def process_name(message: Message, state: FSMContext):
         user_timers[message.from_user.id].cancel()
 
     await state.update_data(name=message.text)
+    await users_data.update_user_data(message.from_user.id, "name", message.text)
     await state.set_state(UserForm.waiting_for_age)
     # очікуємо 3 секунд
     await asyncio.sleep(3)
@@ -399,7 +471,8 @@ async def process_name(message: Message, state: FSMContext):
 @router.message(UserForm.waiting_for_age)
 async def process_age(message: Message, state: FSMContext):
     """Обробка віку користувача"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -420,6 +493,7 @@ async def process_age(message: Message, state: FSMContext):
             user_timers[message.from_user.id].cancel()
 
         await state.update_data(age=age)
+        await users_data.update_user_data(message.from_user.id, "age", age)
         # очікуємо 3 секунд
         await asyncio.sleep(3)
         await state.set_state(UserForm.waiting_for_location)
@@ -436,7 +510,8 @@ async def process_age(message: Message, state: FSMContext):
 @router.message(UserForm.waiting_for_location)
 async def process_location(message: Message, state: FSMContext):
     """Обробка місцезнаходження користувача"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -452,6 +527,7 @@ async def process_location(message: Message, state: FSMContext):
         user_timers[message.from_user.id].cancel()
 
     await state.update_data(location=message.text)
+    await users_data.update_user_data(message.from_user.id, "location", message.text)
     await state.set_state(UserForm.waiting_for_event_details)
     # очікуємо 3 секунд
     await asyncio.sleep(3)
@@ -466,7 +542,8 @@ async def process_location(message: Message, state: FSMContext):
 @router.message(UserForm.waiting_for_event_details)
 async def process_event_details(message: Message, state: FSMContext):
     """Обробка деталей події"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -482,6 +559,7 @@ async def process_event_details(message: Message, state: FSMContext):
         user_timers[message.from_user.id].cancel()
 
     await state.update_data(event_details=message.text)
+    await users_data.update_user_data(message.from_user.id, "event_details", message.text)
     await state.set_state(UserForm.waiting_for_help_type)
     # очікуємо 3 секунд
     await asyncio.sleep(3)
@@ -496,7 +574,8 @@ async def process_event_details(message: Message, state: FSMContext):
 @router.message(UserForm.waiting_for_help_type)
 async def process_help_type(message: Message, state: FSMContext):
     """Обробка типу допомоги"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -512,6 +591,7 @@ async def process_help_type(message: Message, state: FSMContext):
         user_timers[message.from_user.id].cancel()
 
     await state.update_data(help_type=message.text)
+    await users_data.update_user_data(message.from_user.id, "help_type", message.text)
     await state.set_state(UserForm.waiting_for_description)
     # очікуємо 3 секунд
     await asyncio.sleep(3)
@@ -526,7 +606,8 @@ async def process_help_type(message: Message, state: FSMContext):
 @router.message(UserForm.waiting_for_description)
 async def process_description(message: Message, state: FSMContext):
     """Обробка опису та завершення форми"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -544,11 +625,12 @@ async def process_description(message: Message, state: FSMContext):
 
     user_data = await state.get_data()
     await state.update_data(description=message.text)
+    await users_data.update_user_data(message.from_user.id, "description", message.text)
 
     # Надсилаємо сповіщення про завершення форми операторам
     notification = (
         f"📋 <b>Форма заповнена:</b>\n\n"
-        f"📌 <b>ID:</b> <code>{message.from_user.id}</code>\n"
+        f"📌 <b>ID:</b> <code>{user_data['uuid']}</code>\n"
         f"👤 <b>Ім'я:</b> {user_data['name']}\n"
         f"📅 <b>Вік:</b> {user_data['age']}\n"
         f"📍 <b>Місцезнаходження:</b> {user_data['location']}\n"
@@ -571,7 +653,8 @@ async def process_description(message: Message, state: FSMContext):
 @router.message(MediaForm.waiting_for_media)
 async def process_media(message: Message, state: FSMContext):
     """Обробка повідомленнь від представників організацій та медіа"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -593,7 +676,8 @@ async def process_media(message: Message, state: FSMContext):
 @router.message(OtherPeopleHelpForm.waiting_for_other_people_help_message)
 async def process_other_people_help(message: Message, state: FSMContext):
     """Обробка повідомлення про допомогу іншим"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -675,7 +759,8 @@ async def handle_continue_response(message: Message, state: FSMContext):
 @router.message(ChatMode.manual)
 async def handle_manual_mode(message: Message):
     """Обробка повідомлень в ручному режимі"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -692,13 +777,13 @@ async def handle_manual_mode(message: Message):
 async def handle_operator_reply(message: Message):
     """Обробка відповідей операторів на повідомлення"""
     # Отримуємо ID користувача з оригінального повідомлення
-    user_id = extract_user_id(message.reply_to_message)
+    user_id, user_uuid = await extract_user_id(message.reply_to_message)
 
     if user_id:
         # Пересилаємо відповідь користувачу
         await forward_to_user(message, user_id)
         await message.answer(
-            f"✅ <b>Повідомлення надіслано користувачу</b> <code>{user_id}</code>",
+            f"✅ <b>Повідомлення надіслано користувачу</b> <code>{user_uuid}</code>",
             parse_mode="HTML"
         )
     else:
@@ -712,7 +797,8 @@ async def handle_operator_reply(message: Message):
 @router.message(lambda message: not message.text)
 async def handle_non_text(message: Message):
     """Обробка нетекстових повідомлень"""
-    if user_access.is_blocked(message.from_user.id):
+    user_data = await users_data.get_user_data(str(message.from_user.id))
+    if user_access.is_blocked(user_data['uuid']):
         await message.answer(
             "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
             parse_mode="HTML"
@@ -721,11 +807,11 @@ async def handle_non_text(message: Message):
 
     # Якщо повідомлення від оператора і це відповідь
     if message.from_user.id in get_operator_ids() and message.reply_to_message:
-        user_id = extract_user_id(message.reply_to_message)
+        user_id, user_uuid = await extract_user_id(message.reply_to_message)
         if user_id:
             await forward_to_user(message, user_id)
             await message.answer(
-                f"✅ <b>Медіа надіслано користувачу</b> <code>{user_id}</code>",
+                f"✅ <b>Медіа надіслано користувачу</b> <code>{user_uuid}</code>",
                 parse_mode="HTML"
             )
             return
