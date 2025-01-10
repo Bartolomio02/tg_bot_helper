@@ -3,12 +3,9 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Головна клавіатура меню з 6 опціями"""
     keyboard = [
-        [KeyboardButton(text="1️⃣ Консультація щодо допомоги")],
-        [KeyboardButton(text="2️⃣ Медична допомога")],
-        [KeyboardButton(text="3️⃣ Консультація юриста")],
-        [KeyboardButton(text="4️⃣ Психологічна допомога")],
-        [KeyboardButton(text="5️⃣ Представник організації/медіа")],
-        [KeyboardButton(text="6️⃣ Допомога для близької людини")]
+        [KeyboardButton(text="1️⃣ Консультація щодо допомоги"), KeyboardButton(text="2️⃣ Психологічна допомога")],
+        [KeyboardButton(text="3️⃣ Медична допомога"), KeyboardButton(text="4️⃣ Консультація юриста")],
+        [KeyboardButton(text="5️⃣ Представник організації/медіа"), KeyboardButton(text="6️⃣ Допомога для близької людини")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 

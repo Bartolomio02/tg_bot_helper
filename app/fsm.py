@@ -6,7 +6,6 @@ class UserForm(StatesGroup):
     waiting_for_location = State()
     waiting_for_event_details = State()
     waiting_for_help_type = State()
-    waiting_for_description = State()
 
 class ChatMode(StatesGroup):
     automated = State()
