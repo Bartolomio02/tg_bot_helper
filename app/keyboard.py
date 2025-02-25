@@ -10,7 +10,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_yes_no_keyboard() -> ReplyKeyboardMarkup:
-    """Клавіатура Так/Ні для рішення про термінову допомогу"""
+    """Клавіатура Так/Ні"""
     keyboard = [
         [KeyboardButton(text="Так"), KeyboardButton(text="Ні")]
     ]
@@ -20,5 +20,13 @@ def get_continue_keyboard() -> ReplyKeyboardMarkup:
     """Клавіатура для продовження"""
     keyboard = [
         [KeyboardButton(text="Продовжити")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def get_back_keyboard() -> ReplyKeyboardMarkup:
+    """Клавіатура для повернення до головного меню"""
+    keyboard = [
+        [KeyboardButton(text="🔙 Головнe меню")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)

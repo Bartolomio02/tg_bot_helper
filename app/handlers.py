@@ -7,14 +7,14 @@ from aiogram.types import Message, ReplyKeyboardRemove
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from static import messages
-from .keyboard import get_main_keyboard, get_yes_no_keyboard, get_continue_keyboard
+from .keyboard import get_main_keyboard, get_yes_no_keyboard, get_continue_keyboard, get_back_keyboard
 from .fsm import UserForm, ChatMode, MediaForm, OtherPeopleHelpForm
 from .middleware import get_operator_ids
 from .user_access import user_access
 from .users_data import UsersData
 
 users_data = UsersData()
-# TODO уточнить нужно ли при при восьмом пункте второй пункт делать (если не ответил задавать другой вопрос и другой стейт)
+
 
 
 # Роутер для обробки повідомлень
@@ -22,6 +22,15 @@ router = Router()
 
 # Словник для зберігання таймерів користувачів
 user_timers = {}
+
+# Повернення до говоловного меню
+@router.message(F.text[0] == "🔙")
+async def back_to_main_menu(message: Message, state: FSMContext):
+    """Повернення до головного меню"""
+    await state.clear()
+    await state.set_state(ChatMode.automated)
+    await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+
 
 
 async def check_timeout(user_id: int, state: FSMContext, message: Message):
@@ -38,12 +47,22 @@ async def check_timeout(user_id: int, state: FSMContext, message: Message):
         UserForm.waiting_for_help_type,
     ]:
         await message.answer(
+            messages.ask_description_form_message, parse_mode="HTML"
+        )
+        await asyncio.sleep(15)
+        await message.answer(
             "❓ <b>Продовжимо?</b>",
             reply_markup=get_yes_no_keyboard(),
             parse_mode="HTML"
         )
         # Встановлюємо стан очікування відповіді про продовження
         await state.set_state("waiting_continue")
+    if current_state == ChatMode.waiting_continue_help:
+        await message.answer(
+            messages.cancel_waiting_help_message, parse_mode="HTML", reply_markup=get_back_keyboard()
+        )
+        await state.clear()
+
 
 
 async def extract_user_id(message: Message) -> int and str:
@@ -327,18 +346,19 @@ async def start_handler(message: Message, state: FSMContext):
             except Exception as e:
                 logging.error(f"Помилка при надсиланні сповіщення оператору {operator_id}: {e}")
 
-    if 9+2 <= current_hour <= 20+2:
-        await message.answer(f"Зараз {current_hour}", reply_markup=get_main_keyboard(), parse_mode="HTML")
+    if 9 <= int(current_hour)+2 <= 20:
         # Робочі години
         await state.set_state(ChatMode.automated)
-        await message.answer(messages.main_message_online, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        await message.answer(messages.main_message_online, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        await asyncio.sleep(30) # замінити на 30
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
     else:
         # Неробочі години
-        await state.set_state(ChatMode.waiting_urgent)
+        await state.set_state(ChatMode.waiting_urgent_help)
         await message.answer(messages.main_message_offline, reply_markup=get_yes_no_keyboard(), parse_mode="HTML")
 
 
-@router.message(ChatMode.waiting_urgent, F.text.casefold() == "так")
+@router.message(ChatMode.waiting_urgent_help, F.text.casefold() == "так")
 async def handle_urgent_yes(message: Message, state: FSMContext):
     """Обробка термінової допомоги"""
     user_data = await users_data.get_user_data(str(message.from_user.id))
@@ -353,23 +373,35 @@ async def handle_urgent_yes(message: Message, state: FSMContext):
     await message.answer(messages.help_message_offline_one, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
     # Очікуємо 15 секунд
     await asyncio.sleep(15)
-    await message.answer(messages.help_message_offline_two, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
-    await asyncio.sleep(7)
-    await message.answer(messages.main_message_online, parse_mode="HTML")
-    await asyncio.sleep(15)
-    await message.answer(messages.start_form_message, parse_mode="HTML")
-    await asyncio.sleep(3)
-    await message.answer(messages.ask_name_form_message, parse_mode="HTML")
-
-    await state.set_state(UserForm.waiting_for_name)
-
+    await state.set_state(ChatMode.waiting_continue_help)
+    await message.answer(messages.help_message_offline_two, reply_markup=get_yes_no_keyboard(), parse_mode="HTML")
     # Запускаем таймер для проверки тайм-аута
     user_timers[message.from_user.id] = asyncio.create_task(
         check_timeout(message.from_user.id, state, message)
     )
 
+@router.message(ChatMode.waiting_continue_help)
+async def handle_urgent_help(message: Message, state: FSMContext):
+    if message.text.casefold() == "так":
+        await asyncio.sleep(1)
+        await message.answer(messages.main_message_online, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        await asyncio.sleep(15)
+        await message.answer(messages.start_form_message, parse_mode="HTML")
+        await asyncio.sleep(3)
+        await message.answer(messages.ask_name_form_message, parse_mode="HTML", reply_markup=get_back_keyboard())
+        await state.set_state(UserForm.waiting_for_name)
+    elif message.text.casefold() == "ні":
+        await message.answer(
+            messages.cancel_waiting_help_message,
+            parse_mode="HTML",
+            reply_markup=get_back_keyboard()
+        )
+        await state.clear()
+    else:
+        await message.answer("❌ <b>Будь ласка, використовуйте кнопки меню</b>", parse_mode="HTML")
 
-@router.message(ChatMode.waiting_urgent, F.text.casefold() == "ні")
+
+@router.message(ChatMode.waiting_urgent_help, F.text.casefold() == "ні")
 async def handle_urgent_no(message: Message, state: FSMContext):
     """Обробка нетермінової допомоги"""
     user_data = await users_data.get_user_data(str(message.from_user.id))
@@ -385,7 +417,8 @@ async def handle_urgent_no(message: Message, state: FSMContext):
     await message.answer(messages.main_message_online, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
     await asyncio.sleep(3)
     await message.answer(messages.start_form_message, parse_mode="HTML")
-    await message.answer(messages.ask_name_form_message, parse_mode="HTML")
+    await asyncio.sleep(3)
+    await message.answer(messages.ask_name_form_message, parse_mode="HTML", reply_markup=get_back_keyboard())
 
     # Запускаем таймер для проверки тайм-аута
     user_timers[message.from_user.id] = asyncio.create_task(
@@ -412,11 +445,11 @@ async def handle_menu_choice(message: Message, state: FSMContext):
     # Спочатку обробляємо спеціальні опції меню
     if "5️⃣" in message.text:
         await state.set_state(MediaForm.waiting_for_media)
-        await message.answer(messages.media_message, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        await message.answer(messages.media_message, parse_mode="HTML", reply_markup=get_back_keyboard())
         return
     elif "6️⃣" in message.text:
         await state.set_state(OtherPeopleHelpForm.waiting_for_other_people_help_message)
-        await message.answer(messages.other_people_help_message, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        await message.answer(messages.other_people_help_message, parse_mode="HTML", reply_markup=get_back_keyboard())
         return
 
     # Починаємо форму тільки для опцій меню 1-4
@@ -425,7 +458,7 @@ async def handle_menu_choice(message: Message, state: FSMContext):
         await message.answer(messages.start_form_message, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
         # Очікуємо 10 секунд
         await asyncio.sleep(10)
-        await message.answer(messages.ask_name_form_message, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        await message.answer(messages.ask_name_form_message, parse_mode="HTML", reply_markup=get_back_keyboard())
 
         # Запускаємо таймер для перевірки тайм-ауту
         user_timers[message.from_user.id] = asyncio.create_task(
@@ -450,6 +483,12 @@ async def process_name(message: Message, state: FSMContext):
 
     if not message.text:
         await message.answer("❌ <b>Будь ласка, введіть ваше ім'я текстом</b>", parse_mode="HTML")
+        return
+
+    if message.text == "🔙 Головнe меню":
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
         return
     # Скасуємо попередній таймер
     if message.from_user.id in user_timers:
@@ -483,6 +522,11 @@ async def process_age(message: Message, state: FSMContext):
 
     if not message.text:
         await message.answer("❌ <b>Будь ласка, введіть ваш вік числом</b>", parse_mode="HTML")
+        return
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
         return
 
     try:
@@ -524,7 +568,11 @@ async def process_location(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ <b>Будь ласка, введіть ваше місцезнаходження текстом</b>", parse_mode="HTML")
         return
-
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
     # Скасуємо попередній таймер
     if message.from_user.id in user_timers:
         user_timers[message.from_user.id].cancel()
@@ -557,7 +605,11 @@ async def process_event_details(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ <b>Будь ласка, опишіть деталі події текстом</b>", parse_mode="HTML")
         return
-
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
     # Скасуємо попередній таймер
     if message.from_user.id in user_timers:
         user_timers[message.from_user.id].cancel()
@@ -590,7 +642,11 @@ async def process_help_type(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ <b>Будь ласка, опишіть потрібну допомогу текстом</b>", parse_mode="HTML")
         return
-
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
     # Скасуємо попередній таймер
     if message.from_user.id in user_timers:
         user_timers[message.from_user.id].cancel()
@@ -615,7 +671,11 @@ async def process_description(message: Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ <b>Будь ласка, надайте опис текстом</b>", parse_mode="HTML")
         return
-
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
     # Скасуємо таймер при завершенні форми
     if message.from_user.id in user_timers:
         user_timers[message.from_user.id].cancel()
@@ -643,7 +703,7 @@ async def process_description(message: Message, state: FSMContext):
 
     # Встановлюємо ручний режим чату та надсилаємо фінальне повідомлення
     await state.set_state(ChatMode.manual)
-    await message.answer(messages.final_form_message, parse_mode="HTML")
+    await message.answer(messages.final_form_message, parse_mode="HTML", reply_markup=get_back_keyboard())
 
 
 @router.message(MediaForm.waiting_for_media)
@@ -654,10 +714,16 @@ async def process_media(message: Message, state: FSMContext):
         if user_access.is_blocked(user_data['uuid']):
             await message.answer(
                 "❌ <b>На жаль, ваш доступ до бота обмежено.</b>",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=get_back_keyboard()
             )
             return
-
+    print(message.text)
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
     # Пересилаємо заяву операторам
     await forward_to_operators(message, "Представкник організації/медіа")
 
@@ -666,7 +732,8 @@ async def process_media(message: Message, state: FSMContext):
     await message.answer(
         "✅ <b>Ваше повідомлення успішно передано координатору.</b>\n"
         "Очікуйте на відповідь.",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=get_back_keyboard()
     )
 
 
@@ -688,7 +755,11 @@ async def process_other_people_help(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
         return
-
+    if "🔙" in message.text:
+        await state.clear()
+        await state.set_state(ChatMode.automated)
+        await message.answer(messages.menu_message, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        return
     # Встановлюємо ручний режим для подальшого спілкування
     await state.set_state(ChatMode.manual)
 
@@ -698,7 +769,8 @@ async def process_other_people_help(message: Message, state: FSMContext):
         await forward_to_operators(message, "Допомога іншим")
         await message.answer(
             "✅ <b>Ваше повідомлення передано координатору.</b>\nОчікуйте на відповідь.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=get_back_keyboard()
         )
 
 
@@ -714,42 +786,58 @@ async def handle_continue_response(message: Message, state: FSMContext):
                 user_timers[message.from_user.id].cancel()
                 del user_timers[message.from_user.id]
             await state.clear()
-            await message.answer(messages.cancel_form_message, parse_mode="HTML")
+            await message.answer(messages.cancel_form_message, parse_mode="HTML", reply_markup=get_back_keyboard())
             await asyncio.sleep(2)
             await message.answer(
                 "❌ <b>Заповнення форми скасовано.</b>\n"
-                "Щоб почати спочатку, використайте команду /start",
-                parse_mode="HTML"
+                "Щоб почати спочатку, використайте команду /start або через кнопку повернення",
+                parse_mode="HTML",
+                reply_markup=get_back_keyboard()
             )
-        else:
-
+        elif message.text.lower() == "так":
             # Відновлюємо попередній стан та продовжуємо опитування
             user_data = await state.get_data()
             if 'name' not in user_data:
                 await state.set_state(UserForm.waiting_for_name)
                 await message.answer(messages.ask_name_form_message, parse_mode="HTML",
-                                     reply_markup=ReplyKeyboardRemove())
+                                     reply_markup=get_back_keyboard())
             elif 'age' not in user_data:
                 await state.set_state(UserForm.waiting_for_age)
                 await message.answer(messages.ask_age_form_message, parse_mode="HTML",
-                                     reply_markup=ReplyKeyboardRemove())
+                                     reply_markup=get_back_keyboard())
             elif 'location' not in user_data:
                 await state.set_state(UserForm.waiting_for_location)
                 await message.answer(messages.ask_geo_form_message, parse_mode="HTML",
-                                     reply_markup=ReplyKeyboardRemove())
+                                     reply_markup=get_back_keyboard())
             elif 'event_details' not in user_data:
                 await state.set_state(UserForm.waiting_for_event_details)
                 await message.answer(messages.ask_where_form_message, parse_mode="HTML",
-                                     reply_markup=ReplyKeyboardRemove())
+                                     reply_markup=get_back_keyboard())
             elif 'help_type' not in user_data:
                 await state.set_state(UserForm.waiting_for_help_type)
                 await message.answer(messages.ask_what_form_message, parse_mode="HTML",
-                                     reply_markup=ReplyKeyboardRemove())
+                                     reply_markup=get_back_keyboard())
 
             # Запускаємо новий таймер
             user_timers[message.from_user.id] = asyncio.create_task(
                 check_timeout(message.from_user.id, state, message)
             )
+        else:
+            # якщо відповіть не "так" чи "ні" записуємо її в анкету
+            user_data = await state.get_data()
+            if 'name' not in user_data:
+                await process_name(message, state)
+            elif 'age' not in user_data:
+                await process_age(message, state)
+            elif 'location' not in user_data:
+                await process_location(message, state)
+            elif 'event_details' not in user_data:
+                await process_event_details(message, state)
+            elif 'help_type' not in user_data:
+                await process_help_type(message, state)
+
+
+
 
 
 @router.message(ChatMode.manual)

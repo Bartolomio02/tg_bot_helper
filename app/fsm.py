@@ -10,7 +10,8 @@ class UserForm(StatesGroup):
 class ChatMode(StatesGroup):
     automated = State()
     manual = State()
-    waiting_urgent = State()  # Для прийняття рішення про термінову допомогу в неробочий час
+    waiting_urgent_help = State()  # Для прийняття рішення про термінову допомогу в неробочий час
+    waiting_continue_help = State()  # Для продовження допомоги в неробочий час
 
 class MediaForm(StatesGroup):
     waiting_for_media = State()
